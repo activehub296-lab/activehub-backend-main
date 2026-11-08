@@ -1,0 +1,253 @@
+package com.activehub.usecases.cancelarclase;
+
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.lenient;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import com.activehub.domain.actividad.Actividad;
+import com.activehub.domain.actividad.Clase;
+import com.activehub.domain.actividad.ClaseRepository;
+import com.activehub.domain.actividad.EstadoClase;
+import com.activehub.domain.inscripcion.EstadoInscripcion;
+import com.activehub.domain.inscripcion.EstadoPago;
+import com.activehub.domain.inscripcion.Inscripcion;
+import com.activehub.domain.inscripcion.InscripcionRepository;
+import com.activehub.domain.inscripcion.MetodoPago;
+import com.activehub.domain.inscripcion.Pago;
+import com.activehub.domain.inscripcion.PagoRepository;
+import com.activehub.domain.usuario.Usuario;
+import com.activehub.shared.audit.AuditService;
+import com.activehub.shared.security.InstructorVerificadoGuard;
+import com.activehub.shared.error.NoEncontradoException;
+import com.activehub.shared.error.SinPermisoException;
+import com.activehub.shared.error.ValidacionException;
+import com.activehub.shared.notificacion.Destino;
+import com.activehub.shared.notificacion.NotificacionService;
+import com.activehub.shared.notificacion.TipoNotificacion;
+import com.activehub.shared.payments.OperacionesPagoMercadoPago;
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
+
+@ExtendWith(MockitoExtension.class)
+class CancelarClaseServiceTest {
+
+    @Mock
+    private ClaseRepository claseRepository;
+    @Mock
+    private InscripcionRepository inscripcionRepository;
+    @Mock
+    private PagoRepository pagoRepository;
+    @Mock
+    private OperacionesPagoMercadoPago operacionesPago;
+    @Mock
+    private NotificacionService notificacionService;
+    @Mock
+    private AuditService auditService;
+
+    @org.mockito.Mock private InstructorVerificadoGuard instructorVerificadoGuard;
+
+
+    private CancelarClaseService service;
+    private UUID instructorId;
+    private UUID claseId;
+    private Clase clase;
+
+    @BeforeEach
+    void setUp() {
+        // El componente real decide cancelar o reembolsar; aca solo importa que se lo llame y
+        // que el pago quede en el estado que devolveria para uno sin capturar.
+        lenient().when(operacionesPago.reintegrar(any(), any(), any())).thenAnswer(inv -> {
+            Pago p = inv.getArgument(0);
+            p.setEstado(EstadoPago.Cancelado);
+            return EstadoPago.Cancelado;
+        });
+        service = new CancelarClaseService(
+                claseRepository, inscripcionRepository, pagoRepository, operacionesPago, notificacionService, auditService, instructorVerificadoGuard);
+
+        instructorId = UUID.randomUUID();
+        Usuario instructor = new Usuario();
+        ReflectionTestUtils.setField(instructor, "id", instructorId);
+
+        Actividad actividad = new Actividad();
+        actividad.setInstructor(instructor);
+        actividad.setNombre("Yoga");
+
+        claseId = UUID.randomUUID();
+        clase = new Clase();
+        clase.setActividad(actividad);
+        clase.setEstado(EstadoClase.Programada);
+        clase.setFechaHora(Instant.parse("2026-09-01T13:00:00Z"));
+        ReflectionTestUtils.setField(clase, "id", claseId);
+    }
+
+    private Inscripcion inscripcionCon(EstadoInscripcion estado, Pago pago) {
+        Usuario alumno = new Usuario();
+        ReflectionTestUtils.setField(alumno, "id", UUID.randomUUID());
+
+        Inscripcion inscripcion = new Inscripcion();
+        inscripcion.setClase(clase);
+        inscripcion.setAlumno(alumno);
+        inscripcion.setEstado(estado);
+        inscripcion.setPago(pago);
+        ReflectionTestUtils.setField(inscripcion, "id", UUID.randomUUID());
+        return inscripcion;
+    }
+
+    @Test
+    void cancelar_cancelaInscripcionesYPagosRetenidos() {
+        Pago pago = new Pago();
+        pago.setEstado(EstadoPago.Retenido);
+        pago.setMetodo(MetodoPago.MERCADO_PAGO);
+        pago.setMonto(new BigDecimal("4500"));
+        pago.setReferenciaExterna("ref-abc");
+        Inscripcion inscripto = inscripcionCon(EstadoInscripcion.INSCRIPTO, pago);
+
+        when(claseRepository.findById(claseId)).thenReturn(Optional.of(clase));
+        when(inscripcionRepository.findByClaseIdAndEstadoNot(claseId, EstadoInscripcion.CANCELADA))
+                .thenReturn(List.of(inscripto));
+
+        CancelarClaseResponse response = service.cancelar(claseId, instructorId);
+
+        assertThat(response.estado()).isEqualTo("Cancelada");
+        assertThat(clase.getEstado()).isEqualTo(EstadoClase.Cancelada);
+        assertThat(inscripto.getEstado()).isEqualTo(EstadoInscripcion.CANCELADA);
+        assertThat(pago.getEstado()).isEqualTo(EstadoPago.Cancelado);
+        verify(operacionesPago).reintegrar(argThat(p -> "ref-abc".equals(p.getReferenciaExterna())), any(), any());
+        verify(notificacionService).notificar(
+                eq(inscripto.getAlumno().getId()), eq(TipoNotificacion.CLASE_CANCELADA),
+                org.mockito.ArgumentMatchers.endsWith("Se liberó la reserva del pago en tu tarjeta: no se te va a cobrar."),
+                eq(claseId), eq(Destino.clase(claseId)));
+    }
+
+    @Test
+    void cancelar_pagoYaCapturado_elAvisoDiceQueSeReembolsa() {
+        Pago pago = new Pago();
+        pago.setEstado(EstadoPago.Retenido);
+        pago.setMetodo(MetodoPago.MERCADO_PAGO);
+        pago.setMonto(new BigDecimal("4500"));
+        pago.setCapturadoAt(Instant.parse("2026-08-31T13:00:00Z"));
+        Inscripcion inscripto = inscripcionCon(EstadoInscripcion.INSCRIPTO, pago);
+        // KAN-62: capturado, OperacionesPagoMercadoPago reembolsa en vez de cancelar.
+        org.mockito.Mockito.doReturn(EstadoPago.Reembolsado).when(operacionesPago).reintegrar(any(), any(), any());
+
+        when(claseRepository.findById(claseId)).thenReturn(Optional.of(clase));
+        when(inscripcionRepository.findByClaseIdAndEstadoNot(claseId, EstadoInscripcion.CANCELADA))
+                .thenReturn(List.of(inscripto));
+
+        service.cancelar(claseId, instructorId);
+
+        verify(notificacionService).notificar(
+                eq(inscripto.getAlumno().getId()), eq(TipoNotificacion.CLASE_CANCELADA),
+                org.mockito.ArgumentMatchers.contains("Te reembolsamos el pago por Mercado Pago"),
+                eq(claseId), eq(Destino.clase(claseId)));
+    }
+
+    @Test
+    void cancelar_pagoEfectivo_tambienQuedaCancelado() {
+        Pago pago = new Pago();
+        pago.setEstado(EstadoPago.Efectivo);
+        pago.setMetodo(MetodoPago.EFECTIVO);
+        pago.setMonto(new BigDecimal("4500"));
+        Inscripcion pendiente = inscripcionCon(EstadoInscripcion.PAGO_PENDIENTE, pago);
+
+        when(claseRepository.findById(claseId)).thenReturn(Optional.of(clase));
+        when(inscripcionRepository.findByClaseIdAndEstadoNot(claseId, EstadoInscripcion.CANCELADA))
+                .thenReturn(List.of(pendiente));
+
+        service.cancelar(claseId, instructorId);
+
+        // E2I-HU08 criterio 5: no hay gateway al que pedirle nada, pero el registro no puede
+        // quedar como un pago válido de una clase que no existe.
+        assertThat(pago.getEstado()).isEqualTo(EstadoPago.Cancelado);
+        assertThat(pendiente.getEstado()).isEqualTo(EstadoInscripcion.CANCELADA);
+        verify(operacionesPago, never()).reintegrar(any(), any(), any());
+        verify(pagoRepository).save(pago);
+    }
+
+    /** Decisión del usuario (2026-10-31): el efectivo se arregla por fuera de la plataforma. */
+    @Test
+    void cancelar_pagoEfectivo_elAvisoEsSoloLaCancelacion() {
+        Pago pago = new Pago();
+        pago.setEstado(EstadoPago.Efectivo);
+        pago.setMetodo(MetodoPago.EFECTIVO);
+        pago.setMonto(new BigDecimal("4500"));
+        Inscripcion inscripto = inscripcionCon(EstadoInscripcion.INSCRIPTO, pago);
+
+        when(claseRepository.findById(claseId)).thenReturn(Optional.of(clase));
+        when(inscripcionRepository.findByClaseIdAndEstadoNot(claseId, EstadoInscripcion.CANCELADA))
+                .thenReturn(List.of(inscripto));
+
+        service.cancelar(claseId, instructorId);
+
+        verify(notificacionService).notificar(
+                eq(inscripto.getAlumno().getId()), any(),
+                argThat(m -> m.endsWith("Tu inscripción fue cancelada.")), any(), any());
+    }
+
+    /** Una preinscripción no tiene pago ni medio de pago: tampoco hay nada que reintegrar. */
+    @Test
+    void cancelar_preinscripcionSinPago_elAvisoEsSoloLaCancelacion() {
+        Inscripcion preinscripta = inscripcionCon(EstadoInscripcion.PRE_INSCRIPCION, null);
+
+        when(claseRepository.findById(claseId)).thenReturn(Optional.of(clase));
+        when(inscripcionRepository.findByClaseIdAndEstadoNot(claseId, EstadoInscripcion.CANCELADA))
+                .thenReturn(List.of(preinscripta));
+
+        service.cancelar(claseId, instructorId);
+
+        assertThat(preinscripta.getEstado()).isEqualTo(EstadoInscripcion.CANCELADA);
+        verify(operacionesPago, never()).reintegrar(any(), any(), any());
+        verify(notificacionService).notificar(
+                eq(preinscripta.getAlumno().getId()), any(),
+                argThat(m -> m.endsWith("Tu inscripción fue cancelada.")), any(), any());
+    }
+
+    @Test
+    void cancelar_yaCancelada_lanzaValidacion() {
+        clase.setEstado(EstadoClase.Cancelada);
+        when(claseRepository.findById(claseId)).thenReturn(Optional.of(clase));
+
+        assertThatThrownBy(() -> service.cancelar(claseId, instructorId))
+                .isInstanceOf(ValidacionException.class);
+    }
+
+    @Test
+    void cancelar_yaFinalizada_lanzaValidacion() {
+        clase.setEstado(EstadoClase.Finalizada);
+        when(claseRepository.findById(claseId)).thenReturn(Optional.of(clase));
+
+        assertThatThrownBy(() -> service.cancelar(claseId, instructorId))
+                .isInstanceOf(ValidacionException.class);
+    }
+
+    @Test
+    void cancelar_noDueño_lanzaSinPermiso() {
+        when(claseRepository.findById(claseId)).thenReturn(Optional.of(clase));
+
+        assertThatThrownBy(() -> service.cancelar(claseId, UUID.randomUUID()))
+                .isInstanceOf(SinPermisoException.class);
+    }
+
+    @Test
+    void cancelar_inexistente_lanzaNoEncontrado() {
+        when(claseRepository.findById(claseId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.cancelar(claseId, instructorId))
+                .isInstanceOf(NoEncontradoException.class);
+    }
+}

@@ -1,0 +1,111 @@
+package com.activehub.usecases.creardenuncia;
+
+import com.activehub.domain.actividad.Clase;
+import com.activehub.domain.actividad.ClaseRepository;
+import com.activehub.domain.actividad.EstadoClase;
+import com.activehub.domain.denuncia.Denuncia;
+import com.activehub.domain.denuncia.DenunciaRepository;
+import com.activehub.domain.inscripcion.EstadoInscripcion;
+import com.activehub.domain.inscripcion.VentanaPagos;
+import com.activehub.domain.inscripcion.InscripcionRepository;
+import com.activehub.domain.usuario.UsuarioRepository;
+import com.activehub.shared.audit.AuditAccion;
+import com.activehub.shared.audit.AuditService;
+import com.activehub.shared.error.NoEncontradoException;
+import com.activehub.shared.error.ValidacionException;
+import com.activehub.shared.notificacion.Destino;
+import com.activehub.shared.notificacion.NotificacionMensajes;
+import com.activehub.shared.notificacion.NotificacionService;
+import com.activehub.shared.notificacion.TipoNotificacion;
+import java.time.Clock;
+import java.time.Duration;
+import java.util.UUID;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+@Service
+public class CrearDenunciaService {
+
+    private static final Duration UMBRAL_DENUNCIA = Duration.ofHours(1);
+
+    private final ClaseRepository claseRepository;
+    private final InscripcionRepository inscripcionRepository;
+    private final DenunciaRepository denunciaRepository;
+    private final UsuarioRepository usuarioRepository;
+    private final AuditService auditService;
+    private final NotificacionService notificacionService;
+    private final Clock clock;
+
+    public CrearDenunciaService(
+            ClaseRepository claseRepository,
+            InscripcionRepository inscripcionRepository,
+            DenunciaRepository denunciaRepository,
+            UsuarioRepository usuarioRepository,
+            AuditService auditService,
+            NotificacionService notificacionService,
+            Clock clock
+    ) {
+        this.claseRepository = claseRepository;
+        this.inscripcionRepository = inscripcionRepository;
+        this.denunciaRepository = denunciaRepository;
+        this.usuarioRepository = usuarioRepository;
+        this.auditService = auditService;
+        this.notificacionService = notificacionService;
+        this.clock = clock;
+    }
+
+    @Transactional
+    public CrearDenunciaResponse crear(UUID claseId, CrearDenunciaRequest request, UUID alumnoId) {
+        Clase clase = claseRepository.findById(claseId)
+                .orElseThrow(() -> new NoEncontradoException("Clase no encontrada."));
+
+        if (!inscripcionRepository.existsByClaseIdAndAlumnoIdAndEstado(claseId, alumnoId, EstadoInscripcion.INSCRIPTO)) {
+            throw new ValidacionException("Solo podés denunciar clases en las que estuviste inscripto.");
+        }
+        // RN-18: la clase tiene que estar Finalizada, igual que en crearresenia. No alcanza
+        // con que haya pasado la hora de inicio: una clase que sigue en Programada/Habilitada
+        // todavia no se dicto a los ojos del sistema.
+        if (clase.getEstado() != EstadoClase.Finalizada) {
+            throw new ValidacionException("Solo podés denunciar clases que ya finalizaron.");
+        }
+        Duration desdeElInicio = Duration.between(clase.getFechaHora(), clock.instant());
+        if (desdeElInicio.compareTo(UMBRAL_DENUNCIA) < 0) {
+            throw new ValidacionException("Todavía no pasó 1 hora desde el inicio de la clase.");
+        }
+        // La denuncia tambien tiene FECHA LIMITE, y es la misma ventana que retiene el pago
+        // (RN-04): pasado el periodo de denuncias, LiberarPagosScheduler acredita la plata al
+        // instructor, asi que una denuncia posterior ya no tiene nada que reintegrar ni pago
+        // que frenar. Antes no habia tope y se podia denunciar una clase de hace meses: el
+        // caso se aceptaba, quedaba Pendiente y el admin no tenia ninguna accion util.
+        if (desdeElInicio.compareTo(VentanaPagos.PERIODO_DENUNCIAS) > 0) {
+            throw new ValidacionException(
+                    "El plazo para denunciar esta clase venció: se puede reportar hasta "
+                            + VentanaPagos.PERIODO_DENUNCIAS.toHours() + " horas después de su inicio.");
+        }
+        if (denunciaRepository.existsByClaseIdAndAlumnoId(claseId, alumnoId)) {
+            throw new ValidacionException("Ya denunciaste esta clase.");
+        }
+
+        Denuncia denuncia = new Denuncia();
+        denuncia.setClase(clase);
+        denuncia.setAlumno(usuarioRepository.getReferenceById(alumnoId));
+        // En una denuncia de clase el denunciante es el propio alumno; el campo existe porque
+        // el instructor también denuncia (reseñas) y ahí `alumno` queda nulo.
+        denuncia.setDenunciante(usuarioRepository.getReferenceById(alumnoId));
+        denuncia.setMotivo(request.motivo());
+        denuncia = denunciaRepository.saveAndFlush(denuncia);
+
+        notificacionService.notificar(
+                clase.getActividad().getInstructor().getId(),
+                TipoNotificacion.DENUNCIA_RECIBIDA,
+                "Recibiste una denuncia por inasistencia a la clase de \"" + clase.getActividad().getNombre()
+                        + "\" del " + NotificacionMensajes.formatFechaHora(clase.getFechaHora()) + ".",
+                // El instructor no tiene bandeja de denuncias: el contexto del reclamo es la clase.
+                denuncia.getId(), Destino.clase(clase.getId()));
+
+        auditService.registrar(alumnoId, AuditAccion.DENUNCIA_CREADA, "Denuncia", denuncia.getId(), null);
+
+        return new CrearDenunciaResponse(
+                denuncia.getId(), claseId, alumnoId, denuncia.getMotivo(), denuncia.getEstado().getEtiqueta(), denuncia.getCreatedAt());
+    }
+}

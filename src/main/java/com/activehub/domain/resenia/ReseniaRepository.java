@@ -1,0 +1,35 @@
+package com.activehub.domain.resenia;
+
+import java.util.List;
+import java.util.UUID;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
+public interface ReseniaRepository extends JpaRepository<Resenia, UUID> {
+
+    boolean existsByClaseIdAndAlumnoId(UUID claseId, UUID alumnoId);
+
+    /** Las que se ven en el detalle publico: todas (se publican al crearse) salvo las ocultas. */
+    @Query("SELECT r FROM Resenia r JOIN FETCH r.alumno "
+            + "WHERE r.clase.actividad.id = :actividadId AND r.oculta = false "
+            + "ORDER BY r.createdAt DESC")
+    List<Resenia> findVisiblesPorActividad(@Param("actividadId") UUID actividadId);
+
+    @Query("SELECT r FROM Resenia r JOIN FETCH r.clase c JOIN FETCH c.actividad a JOIN FETCH a.instructor "
+            + "WHERE r.alumno.id = :alumnoId ORDER BY r.createdAt DESC")
+    List<Resenia> findByAlumnoIdConDetalle(@Param("alumnoId") UUID alumnoId);
+
+    /**
+     * Todas las resenias (se publican al crearse), para que el admin pueda ocultar una. Incluye
+     * las ocultas a proposito: el admin tiene que poder ver que oculto y con que motivo, no solo
+     * lo que sigue visible.
+     */
+    @Query("SELECT r FROM Resenia r JOIN FETCH r.clase c JOIN FETCH c.actividad JOIN FETCH r.alumno "
+            + "ORDER BY r.createdAt DESC")
+    List<Resenia> findPublicadasConDetalle();
+
+    @Query("SELECT r FROM Resenia r JOIN FETCH r.clase c JOIN FETCH c.actividad a JOIN FETCH r.alumno "
+            + "WHERE a.instructor.id = :instructorId ORDER BY r.createdAt DESC")
+    List<Resenia> findByInstructorIdConDetalle(@Param("instructorId") UUID instructorId);
+}

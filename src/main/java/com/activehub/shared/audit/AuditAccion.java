@@ -1,0 +1,126 @@
+package com.activehub.shared.audit;
+
+public enum AuditAccion {
+    REGISTRO_ALUMNO,
+    REGISTRO_INSTRUCTOR,
+    /** Alta creada con "Continuar con Google": nace con el correo ya verificado. */
+    REGISTRO_GOOGLE,
+    /** Ingresó el código de 6 dígitos del alta: a partir de acá el correo le queda reservado. */
+    EMAIL_VERIFICADO,
+    /** Confirmó un correo NUEVO desde su perfil. La metadata es la dirección nueva. */
+    EMAIL_CAMBIADO,
+    LOGIN_OK,
+    LOGIN_FALLIDO,
+    LOGIN_BLOQUEADO,
+    /**
+     * Alguien pidio algo para lo que no tiene permiso y el backend lo rechazo con 403.
+     * Es una operacion que NO ocurrio, y justamente por eso interesa: un alumno probando
+     * /api/admin/roles es la señal que una auditoria quiere ver. Lo registra
+     * {@code GlobalExceptionHandler}, que es por donde pasan las denegaciones de
+     * {@code @PreAuthorize}.
+     */
+    ACCESO_DENEGADO,
+    ADMIN_CREADO,
+    ACTIVIDAD_CREADA,
+    ACTIVIDAD_ACTUALIZADA,
+    ACTIVIDAD_ELIMINADA,
+    CLASE_CREADA,
+    CLASE_ACTUALIZADA,
+    CLASE_ELIMINADA,
+    TIPO_ACTIVIDAD_CREADO,
+    TIPO_ACTIVIDAD_ACTUALIZADO,
+    TIPO_ACTIVIDAD_ELIMINADO,
+    INSTRUCTOR_VALIDADO,
+    INSTRUCTOR_RECHAZADO,
+    PREINSCRIPCION_CREADA,
+    INSCRIPCION_CREADA,
+    INSCRIPCION_ACTUALIZADA,
+    INSCRIPCION_CANCELADA,
+    COBRO_EFECTIVO_CONFIRMADO,
+    MERCADOPAGO_VINCULADA,
+    MERCADOPAGO_DESVINCULADA,
+    /** El sistema renovo con el refresh token el access token de un instructor (KAN-55). */
+    MERCADOPAGO_TOKEN_RENOVADO,
+    /** MP rechazo la renovacion: la cuenta queda TOKEN_VENCIDO y el instructor tiene que volver a vincular. */
+    MERCADOPAGO_TOKEN_VENCIDO,
+    PAGO_LIBERADO,
+    PAGO_CAPTURADO,
+    PAGO_CAPTURA_ANTICIPADA,
+    PAGO_CAPTURA_FALLIDA,
+    PAGO_REEMBOLSADO,
+    PAGO_CONFIRMADO_MP,
+    PAGO_RECHAZADO_MP,
+    CLASE_CANCELADA,
+    RESENIA_CREADA,
+    /*
+     * RESENIA_ELIMINADA, RESENIA_APROBADA, RESENIA_RECHAZADA y RESENIA_ACTUALIZADA ya no las
+     * escribe ningun caso de uso: la moderacion previa, la edicion y la baja de una resenia se
+     * retiraron (V33). Se conservan porque audit_log es de solo-append y tiene filas con esos
+     * valores, que la pantalla de Auditoria tiene que seguir pudiendo leer. (RESENIA_RECHAZADA
+     * la escribio tambien resolverdenuncia al ocultar una resenia denunciada, con la marca
+     * OCULTA_POR_DENUNCIA, hasta el arreglo de V34; hoy ese camino audita RESENIA_OCULTADA.)
+     */
+    RESENIA_ELIMINADA,
+    RESENIA_APROBADA,
+    RESENIA_RECHAZADA,
+    CLASE_HABILITADA,
+    CLASE_FINALIZADA,
+    DENUNCIA_CREADA,
+    DENUNCIA_EN_AUDITORIA,
+    DENUNCIA_RESUELTA,
+    PENALIZACION_APLICADA,
+    /** La suspension termino por vigencia (sistema) o la levanto un administrador con motivo (V36). */
+    SUSPENSION_LEVANTADA,
+    /** V36: el instructor mando el comprobante de pago de una multa. */
+    COMPROBANTE_PENALIZACION_ENVIADO,
+    /** V36: el administrador marco invalido un comprobante; la multa vuelve a pendiente de pago. */
+    COMPROBANTE_PENALIZACION_INVALIDO,
+    /** V36: el administrador aprobo el comprobante y desbloqueo al instructor. */
+    MULTA_PAGADA,
+    USUARIO_ESTADO_ACTUALIZADO,
+    USUARIO_ACTUALIZADO,
+    PERFIL_ACTUALIZADO,
+    PASSWORD_CAMBIADA,
+    /**
+     * Restableció su contraseña desde "¿Olvidaste tu contraseña?": sin sesión previa y con el
+     * código de 6 dígitos que le llegó al correo. Se distingue de PASSWORD_CAMBIADA a propósito,
+     * que la hace alguien que ya estaba adentro y sabía la contraseña anterior.
+     */
+    PASSWORD_RESTABLECIDA,
+    CUENTA_DADA_DE_BAJA,
+    /** Retirada en V33, ver la nota de RESENIA_ELIMINADA. */
+    RESENIA_ACTUALIZADA,
+    RESENIA_RESPONDIDA,
+    RESENIA_DENUNCIADA,
+    /**
+     * Un admin bajo del listado publico una resenia publicada: por su cuenta (ocultarresenia, con
+     * el motivo que escribio) o al resolver una denuncia (resolverdenuncia con OCULTAR_RESENIA).
+     */
+    RESENIA_OCULTADA,
+    IMAGEN_ACTIVIDAD_AGREGADA,
+    IMAGEN_ACTIVIDAD_ELIMINADA,
+    SOLICITUD_INSTRUCTOR_REABIERTA,
+    AUSENCIA_PROFESOR_NOTIFICADA,
+    FAVORITO_AGREGADO,
+    FAVORITO_QUITADO,
+    CATEGORIA_CREADA,
+    CATEGORIA_ACTUALIZADA,
+    CATEGORIA_ELIMINADA,
+    DOCUMENTO_INSTRUCTOR_SUBIDO,
+    /** El instructor quitó un documento propio (queda como historial para el admin). */
+    DOCUMENTO_INSTRUCTOR_RETIRADO,
+    FOTO_PERFIL_SUBIDA,
+    FOTO_ACTIVIDAD_SUBIDA,
+    ROL_CREADO,
+    PERMISOS_ACTUALIZADOS,
+    INTERESES_ACTUALIZADOS,
+    /** El alumno editó "¿Padecés alguna enfermedad o lesión?". Nunca se guarda el contenido. */
+    CONDICION_SALUD_ACTUALIZADA,
+    ROL_ASIGNADO,
+    NIVEL_INTENSIDAD_CREADO,
+    NIVEL_INTENSIDAD_ACTUALIZADO,
+    NIVEL_INTENSIDAD_ELIMINADO,
+    /** Alguien mando el formulario "Reportar un problema" de /ayuda. El actor es null si no tenia cuenta. */
+    REPORTE_SOPORTE_CREADO,
+    REPORTE_SOPORTE_CERRADO
+}
