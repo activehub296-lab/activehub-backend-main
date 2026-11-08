@@ -1,0 +1,8 @@
+.env
+.env.*
+target
+uploads
+uploads-demo-local
+.idea
+docs
+design_handoff_activehub
